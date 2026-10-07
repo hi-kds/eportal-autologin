@@ -1,0 +1,11 @@
+{
+    "userId": "<你的校园网账号>",
+    "passwordDpapi": "<由 Setup-Credential.ps1 自动写入，请勿手工填写>",
+    "serviceName": "联通",
+    "service": "LT",
+    "ssid": "<校园网 WiFi 名称，例如 CampusWiFi>",
+    "portalHost": "",
+    "queryStringTemplate": "",
+    "updatedAt": "",
+    "schemaVersion": 1
+}
