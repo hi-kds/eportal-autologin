@@ -15,7 +15,8 @@
     账号（学号 / 工号）。省略则交互式输入。
 
 .PARAMETER ServiceName
-    运营商名称，需与 config 中的 serviceMap 键名一致。省略则交互式选择。
+    运营商名称，需与 config 中的 serviceMap 键名一致。省略则交互式选择：
+    直接回车沿用当前运营商，输入序号可更换，列表末项为「自定义」。
 
 .PARAMETER Ssid
     校园网 WiFi 名称。省略则采用当前已连接的 SSID。
@@ -59,8 +60,9 @@ if ($old) {
     Write-Host ('检测到已有配置（账号 {0}，运营商 {1}），直接回车可沿用。' -f $old.userId, $old.serviceName) -ForegroundColor DarkGray
     Write-Host ''
     if (-not $UserId) { $UserId = [string]$old.userId }
-    if (-not $ServiceName) { $ServiceName = [string]$old.serviceName }
     if (-not $Ssid) { $Ssid = [string]$old.ssid }
+    # 运营商刻意不在这里预填：改由下面的选择菜单处理（默认项 = 当前运营商）。
+    # 若在此处预填，`-not $ServiceName` 就恒为假、菜单会被整个跳过，导致无法更换运营商。
 }
 
 # --- 有效运营商映射（内置映射 + 已有 config.json 中的 serviceMap 覆盖项）----
@@ -84,27 +86,61 @@ if ([string]::IsNullOrWhiteSpace($Ssid)) {
 }
 
 # --- 运营商 -----------------------------------------------------------------
+# 注意：这里**不再**因为「已有配置」而跳过选择——旧逻辑会让重跑时无法更换运营商，
+# 想换只能删配置或手改 config.json。
+# 现在：已有配置只作为「默认项」。直接回车 = 沿用当前运营商，输入序号 = 更换，
+# 列表末项 = 自定义（手工输入名称与服务代码，会一并写回 config.json 的 serviceMap）。
 if (-not $ServiceName) {
     $names = @($svcMap.Keys | Sort-Object)
+
+    # 默认项取当前配置里的运营商；若它不在映射中（例如手工改过 config），也补进候选
+    $defaultName = ''
+    if ($old -and -not [string]::IsNullOrWhiteSpace([string]$old.serviceName)) {
+        $defaultName = [string]$old.serviceName
+        if ($names -notcontains $defaultName) {
+            $svcMap[$defaultName] = [string]$old.service
+            $names = @($svcMap.Keys | Sort-Object)
+        }
+    }
+    $defaultIdx = 1
+    if ($defaultName) {
+        for ($i = 0; $i -lt $names.Count; $i++) {
+            if ($names[$i] -eq $defaultName) { $defaultIdx = $i + 1; break }
+        }
+    }
+    $customIdx = $names.Count + 1
+
     Write-Host ''
     Write-Host '请选择运营商：'
     for ($i = 0; $i -lt $names.Count; $i++) {
-        Write-Host ('  {0}) {1}    ({2})' -f ($i + 1), $names[$i], $svcMap[$names[$i]])
+        $tail = if (($i + 1) -eq $defaultIdx) { '    <- 当前' } else { '' }
+        Write-Host ('  {0}) {1}    ({2}){3}' -f ($i + 1), $names[$i], $svcMap[$names[$i]], $tail)
     }
-    $pick = (Read-Host ('输入序号，直接回车 = 1 ({0})' -f $names[0])).Trim()
+    Write-Host ('  {0}) 自定义（手工输入名称与服务代码）' -f $customIdx)
+
+    $pick = (Read-Host ('输入序号，直接回车 = {0} ({1})' -f $defaultIdx, $names[$defaultIdx - 1])).Trim()
     if ([string]::IsNullOrWhiteSpace($pick)) {
-        $ServiceName = $names[0]
+        $ServiceName = $names[$defaultIdx - 1]
     } else {
         $idx = 0
-        if (-not [int]::TryParse($pick, [ref]$idx) -or $idx -lt 1 -or $idx -gt $names.Count) {
+        if (-not [int]::TryParse($pick, [ref]$idx) -or $idx -lt 1 -or $idx -gt $customIdx) {
             throw ('无效的序号: {0}' -f $pick)
         }
-        $ServiceName = $names[$idx - 1]
+        if ($idx -eq $customIdx) {
+            $newName = (Read-Host '请输入运营商名称（如：联通）').Trim()
+            if ([string]::IsNullOrWhiteSpace($newName)) { throw '运营商名称不能为空。' }
+            $newCode = (Read-Host '请输入服务代码（如 LT / DX / YD / default，可向学校网络中心确认）').Trim()
+            if ([string]::IsNullOrWhiteSpace($newCode)) { throw '服务代码不能为空。' }
+            $svcMap[$newName] = $newCode
+            $ServiceName = $newName
+        } else {
+            $ServiceName = $names[$idx - 1]
+        }
     }
 }
 $serviceCode = $svcMap[$ServiceName]
 if (-not $serviceCode) {
-    throw ('未知运营商: {0}。如需自定义，请在 config.json 的 serviceMap 中增加后再运行本脚本，或用 -ServiceName 传入已有键名。' -f $ServiceName)
+    throw ('未知运营商: {0}。可用 -ServiceName 传入已有键名，或删除 config.json 后重跑本脚本。' -f $ServiceName)
 }
 
 # --- 密码 -------------------------------------------------------------------

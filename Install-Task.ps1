@@ -5,34 +5,23 @@
 
 .DESCRIPTION
     1) 把脚本复制到 %LOCALAPPDATA%\EportalAutoLogin\（稳定位置，不受工作区清理影响）
-    2) 注册计划任务：**默认只在用户登录时执行一次**，不做周期巡检。
+    2) 注册计划任务：**只在用户登录时执行一次**，不做周期巡检。
 
-    为什么默认不巡检（重要）：
+    为什么不做周期巡检：
       每次执行都要启动一个 powershell.exe 进程。而
       powershell.exe -WindowStyle Hidden 的机制是「系统先创建控制台窗口 →
       PowerShell 再把它隐藏」，中间那一下会在屏幕上闪一个黑框。
       巡检越频繁，闪得越频繁（每分钟巡检 = 每小时闪 60 次）。
-      所以默认关闭巡检，只在登录时跑一次。
-
-    若确实需要「掉线自动重连」，用 -IntervalMinutes N 显式开启巡检，
-    代价是每隔 N 分钟会闪一次窗。
-
-.PARAMETER IntervalMinutes
-    巡检间隔（分钟）。**默认 0 = 不巡检，只在登录时执行一次。** 填正数才会加周期触发器。
+      因此本脚本只在登录时跑一次，不注册任何周期触发器。
 
 .PARAMETER TaskName
     计划任务名称，默认 EportalAutoLogin。
 
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File .\Install-Task.ps1
-
-.EXAMPLE
-    # 开启每 30 分钟巡检一次（会有周期性闪窗）
-    powershell -ExecutionPolicy Bypass -File .\Install-Task.ps1 -IntervalMinutes 30
 #>
 [CmdletBinding()]
 param(
-    [int]$IntervalMinutes = 0,
     [string]$TaskName = 'EportalAutoLogin'
 )
 
@@ -87,10 +76,10 @@ Write-Host ('脚本已复制到: {0}' -f $dest) -ForegroundColor DarkGray
 Write-Host ('  ' + ($copied -join ', '))
 
 # --- 构造计划任务 -----------------------------------------------------------
-# 这里用完整 XML 注册，而不是 New-ScheduledTaskTrigger 那套 cmdlet。
-# 原因：cmdlet 表达不了「无限期重复」——传 [TimeSpan]::MaxValue 会被序列化成
-# P99999999DT23H59M59S，超出调度器允许的范围，报「任务 XML 包含格式不正确或超出范围的值」。
-# 省略 <Duration> 元素才是调度器认可的「无限期」写法（等价于 GUI 里勾选"无限期"）。
+# 触发器只有一个：用户在登录时执行一次（LogonTrigger）。
+# 这里用完整 XML 注册，而不是 New-ScheduledTaskTrigger 那套 cmdlet，
+# 是为了能精确控制 Settings / Principal 字段，并避免 cmdlet 在表达
+# 重复间隔时序列化出非法值的坑。
 $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 $pwsh = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 if (-not (Test-Path -LiteralPath $pwsh)) { $pwsh = 'powershell.exe' }
@@ -99,23 +88,6 @@ $argLine = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidd
 
 function ConvertTo-XmlText([string]$s) {
     return ($s -replace '&', '&amp;' -replace '<', '&lt;' -replace '>', '&gt;' -replace '"', '&quot;' -replace "'", '&apos;')
-}
-
-# 周期巡检触发器：仅当 IntervalMinutes > 0 时才生成。
-# 默认 0 = 不生成，即「只在登录时执行一次」。
-$repeatBlock = ''
-if ($IntervalMinutes -gt 0) {
-    $startBoundary  = (Get-Date).AddMinutes(1).ToString('yyyy-MM-ddTHH:mm:ss')
-    $repeatInterval = 'PT{0}M' -f $IntervalMinutes
-    $repeatBlock = @"
-    <TimeTrigger>
-      <StartBoundary>$startBoundary</StartBoundary>
-      <Repetition>
-        <Interval>$repeatInterval</Interval>
-      </Repetition>
-      <Enabled>true</Enabled>
-    </TimeTrigger>
-"@
 }
 
 $taskXml = @"
@@ -128,7 +100,7 @@ $taskXml = @"
       <Enabled>true</Enabled>
       <UserId>$(ConvertTo-XmlText $currentUser)</UserId>
     </LogonTrigger>
-$repeatBlock  </Triggers>
+  </Triggers>
   <Principals>
     <Principal id="Author">
       <UserId>$(ConvertTo-XmlText $currentUser)</UserId>
@@ -174,12 +146,6 @@ try {
         $action  = New-ScheduledTaskAction -Execute $pwsh -Argument $argLine -WorkingDirectory $dest
         $tLogon  = New-ScheduledTaskTrigger -AtLogOn -User $currentUser
         $triggers = @($tLogon)
-        if ($IntervalMinutes -gt 0) {
-            $tRepeat = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
-                -RepetitionInterval (New-TimeSpan -Minutes $IntervalMinutes) `
-                -RepetitionDuration (New-TimeSpan -Days 3650)
-            $triggers += $tRepeat
-        }
         $principal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive -RunLevel Limited
         $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
             -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
@@ -200,11 +166,7 @@ if ($null -eq $task) {
 }
 Write-Host ''
 Write-Host ('计划任务已注册: {0}（状态 {1}）' -f $task.TaskName, $task.State) -ForegroundColor Green
-if ($IntervalMinutes -gt 0) {
-    Write-Host ('  触发 : 用户登录时 + 每 {0} 分钟巡检（会有周期性闪窗）' -f $IntervalMinutes)
-} else {
-    Write-Host '  触发 : 仅用户登录时执行一次（不巡检，无周期性弹窗）'
-}
+Write-Host '  触发 : 仅用户登录时执行一次（不巡检，无周期性弹窗）'
 Write-Host ('  账户 : {0}（非提权运行）' -f $currentUser)
 Write-Host ('  命令 : {0} {1}' -f $pwsh, $argLine)
 

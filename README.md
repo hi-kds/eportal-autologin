@@ -1,7 +1,7 @@
 # ePortal 校园网自动认证
 
 Windows 上用的校园网自动认证脚本。开机（登录）后自动完成认证，
-掉线时可手动或按间隔重连，不用再打开浏览器手点一遍。
+掉线时可手动重连，不用再打开浏览器手点一遍。
 
 用 PowerShell 写成，不依赖 Python 或任何第三方库，也不需要管理员权限。
 
@@ -31,7 +31,7 @@ Windows 上用的校园网自动认证脚本。开机（登录）后自动完成
 - **指数退避重试**：一次运行内最多尝试 3 次，间隔 3s / 6s / 12s，中途若恢复在线立即停止
 - **日志轮转**：按天写日志，自动清理 7 天前的文件
 - **失败通知**：认证失败时弹出系统通知，不必去翻日志
-- **可选巡检**：默认只在登录时执行一次；需要掉线自动重连时可显式开启周期巡检
+- **只在登录时执行一次**：不注册周期任务，避免反复闪窗；掉线时手动跑一次即可
 
 ---
 
@@ -60,12 +60,9 @@ powershell -ExecutionPolicy Bypass -File .\Install-Task.ps1
 
 完成。之后每次登录 Windows，脚本会自动向校园网提交认证。
 
-需要「掉线自动重连」时，用巡检模式重装一次：
-
-```powershell
-# 每 30 分钟检查一次，掉线则重连（代价：每 30 分钟会闪一次窗口）
-powershell -ExecutionPolicy Bypass -File .\Install-Task.ps1 -IntervalMinutes 30
-```
+想**更换运营商**（或改用自定义服务代码）时，重跑一次 `Setup-Credential.ps1` 即可：
+它会列出运营商菜单并默认停在当前选项 —— 直接回车沿用、输入序号更换、
+选末项「自定义」则可手工输入名称与服务代码。
 
 ### 手动操作
 
@@ -142,8 +139,18 @@ powershell -ExecutionPolicy Bypass -File .\EportalAutoLogin.ps1 -Force -Console
 **Q：每次登录都会闪一下黑框？**
 
 这是 `powershell.exe -WindowStyle Hidden` 的固有限制：系统先创建控制台窗口，
-PowerShell 再把它隐藏，中间那一下会露出来。不开启巡检时一天只闪一次。
+PowerShell 再把它隐藏，中间那一下会露出来。本脚本只在登录时执行一次，所以一天只闪一次。
 彻底消除需要改用无窗口宿主（如编译为 exe 或改用 VBS 包装），本仓库未包含。
+
+**Q：掉线了怎么办？**
+
+本脚本不做周期巡检（周期性拉起进程会反复闪窗）。掉线时手动跑一次即可：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\EportalAutoLogin.ps1 -Console
+```
+
+也可把这条命令做成桌面快捷方式，需要时双击。
 
 **Q：同学的学校能用吗？**
 
